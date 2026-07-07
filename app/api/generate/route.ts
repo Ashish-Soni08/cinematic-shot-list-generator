@@ -1,4 +1,4 @@
-import { streamText, Output } from 'ai'
+import { streamText, Output, createGateway } from 'ai'
 import { z } from 'zod'
 
 export const maxDuration = 120
@@ -40,8 +40,30 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Scene description is required.' }, { status: 400 })
   }
 
+  const apiKey = req.headers.get('x-gateway-api-key')?.trim()
+  if (!apiKey) {
+    return Response.json(
+      { error: 'Add your AI Gateway API key to generate shot lists.' },
+      { status: 401 },
+    )
+  }
+
+  const gateway = createGateway({ apiKey })
+
+  // Validate the key up front so bad keys fail with a clear 401
+  // instead of a broken stream mid-generation.
+  try {
+    await gateway.getCredits()
+  } catch (error) {
+    console.error('[v0] gateway key validation failed:', error)
+    return Response.json(
+      { error: 'That API key was rejected by AI Gateway. Check it and try again.' },
+      { status: 401 },
+    )
+  }
+
   const result = streamText({
-    model: 'openai/gpt-5.4-mini',
+    model: gateway('openai/gpt-5.4-mini'),
     output: Output.array({
       name: 'ShotList',
       description: 'A cinematic shot list breaking a scene into individual shots.',
