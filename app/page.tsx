@@ -1,0 +1,342 @@
+'use client'
+
+import { useCallback, useRef, useState } from 'react'
+import {
+  Aperture,
+  Check,
+  Clapperboard,
+  Copy,
+  Film,
+  Lightbulb,
+  Loader2,
+  Move3D,
+  Scan,
+  Sparkles,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+
+type Shot = {
+  shotNumber: number
+  title: string
+  framing: string
+  lens: string
+  movement: string
+  lighting: string
+  duration: string
+  description: string
+  videoPrompt: string
+}
+
+const EXAMPLE_SCENES = [
+  'A lone astronaut discovers an abandoned greenhouse on Mars, sunrise breaking through dusty glass panels',
+  'A jazz singer performs her final song in a smoky 1950s Harlem club as the crowd slowly empties',
+  'Two rival chefs face off during a chaotic dinner rush in a cramped Tokyo alley kitchen',
+]
+
+function SpecRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  value: string
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+      <div className="min-w-0">
+        <span className="block font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
+          {label}
+        </span>
+        <span className="text-sm leading-relaxed text-card-foreground">{value}</span>
+      </div>
+    </div>
+  )
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleCopy = useCallback(async () => {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    timeoutRef.current = setTimeout(() => setCopied(false), 2000)
+  }, [text])
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={handleCopy}
+      className="gap-1.5 border-border bg-transparent font-mono text-xs text-muted-foreground hover:text-foreground"
+    >
+      {copied ? (
+        <Check className="size-3.5 text-primary" aria-hidden="true" />
+      ) : (
+        <Copy className="size-3.5" aria-hidden="true" />
+      )}
+      {copied ? 'Copied' : label}
+    </Button>
+  )
+}
+
+function ShotCard({ shot }: { shot: Shot }) {
+  return (
+    <article className="rounded-xl border border-border bg-card p-5 md:p-6">
+      <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 items-center justify-center rounded-md bg-primary font-mono text-sm font-bold text-primary-foreground">
+            {String(shot.shotNumber).padStart(2, '0')}
+          </span>
+          <div>
+            <h3 className="text-base font-semibold text-card-foreground text-balance">
+              {shot.title}
+            </h3>
+            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
+              {'DUR '}
+              {shot.duration}
+            </span>
+          </div>
+        </div>
+        <CopyButton text={shot.videoPrompt} label="Copy prompt" />
+      </header>
+
+      <p className="mb-5 text-sm leading-relaxed text-muted-foreground">{shot.description}</p>
+
+      <div className="mb-5 grid gap-4 sm:grid-cols-2">
+        <SpecRow icon={Scan} label="Framing" value={shot.framing} />
+        <SpecRow icon={Aperture} label="Lens" value={shot.lens} />
+        <SpecRow icon={Move3D} label="Movement" value={shot.movement} />
+        <SpecRow icon={Lightbulb} label="Lighting" value={shot.lighting} />
+      </div>
+
+      <div className="rounded-lg border border-border bg-background p-4">
+        <span className="mb-2 block font-mono text-[11px] uppercase tracking-widest text-primary">
+          {'AI Video Prompt // Seedance · Kling'}
+        </span>
+        <p className="font-mono text-xs leading-relaxed text-muted-foreground">
+          {shot.videoPrompt}
+        </p>
+      </div>
+    </article>
+  )
+}
+
+export default function Page() {
+  const [scene, setScene] = useState('')
+  const [shots, setShots] = useState<Shot[]>([])
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  const generate = useCallback(
+    async (sceneText: string) => {
+      if (isGenerating || sceneText.trim().length === 0) return
+
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      setIsGenerating(true)
+      setError(null)
+      setShots([])
+
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scene: sceneText }),
+          signal: controller.signal,
+        })
+
+        if (!res.ok || !res.body) {
+          throw new Error('Generation failed. Please try again.')
+        }
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (line.trim().length === 0) continue
+            const shot = JSON.parse(line) as Shot
+            setShots((prev) => [...prev, shot])
+          }
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        console.error('[v0] generation error:', err)
+        setError(err instanceof Error ? err.message : 'Something went wrong.')
+      } finally {
+        setIsGenerating(false)
+      }
+    },
+    [isGenerating],
+  )
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    generate(scene)
+  }
+
+  const allPrompts = shots
+    .map((s) => `SHOT ${String(s.shotNumber).padStart(2, '0')} — ${s.title}\n${s.videoPrompt}`)
+    .join('\n\n')
+
+  return (
+    <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 py-10 md:py-16">
+      {/* Header */}
+      <header className="mb-10">
+        <div className="mb-6 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Clapperboard className="size-5 text-primary" aria-hidden="true" />
+            <span className="font-mono text-sm font-semibold tracking-wider text-foreground">
+              SHOTCALLER
+            </span>
+          </div>
+          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
+            {isGenerating ? 'Rolling…' : 'System Ready'}
+          </span>
+        </div>
+        <h1 className="mb-3 text-3xl font-bold leading-tight text-foreground text-balance md:text-4xl">
+          Scene in. Shot list out.
+        </h1>
+        <p className="max-w-xl text-sm leading-relaxed text-muted-foreground md:text-base">
+          Describe your scene in plain English. Get a full cinematic breakdown — framing, lens,
+          movement, lighting — as copy-ready prompts for Seedance, Kling, and other AI video
+          tools.
+        </p>
+      </header>
+
+      {/* Scene input */}
+      <form onSubmit={handleSubmit} className="mb-8">
+        <div className="rounded-xl border border-border bg-card p-4 focus-within:ring-2 focus-within:ring-ring">
+          <label htmlFor="scene" className="sr-only">
+            Scene description
+          </label>
+          <textarea
+            id="scene"
+            value={scene}
+            onChange={(e) => setScene(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === 'Enter' &&
+                (e.metaKey || e.ctrlKey) &&
+                !e.nativeEvent.isComposing &&
+                e.keyCode !== 229
+              ) {
+                e.preventDefault()
+                generate(scene)
+              }
+            }}
+            placeholder="A detective enters a rain-soaked alley at midnight, neon signs flickering overhead, and finds a single red umbrella lying on the ground…"
+            rows={4}
+            className="w-full resize-none bg-transparent text-sm leading-relaxed text-card-foreground placeholder:text-muted-foreground focus:outline-none md:text-base"
+          />
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <span className="hidden font-mono text-[11px] text-muted-foreground sm:block">
+              {'⌘ + Enter to generate'}
+            </span>
+            <Button
+              type="submit"
+              disabled={isGenerating || scene.trim().length === 0}
+              className="gap-2 bg-primary font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              {isGenerating ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Sparkles className="size-4" aria-hidden="true" />
+              )}
+              {isGenerating ? 'Generating…' : 'Generate shot list'}
+            </Button>
+          </div>
+        </div>
+      </form>
+
+      {/* Example scenes */}
+      {shots.length === 0 && !isGenerating && (
+        <section aria-label="Example scenes" className="mb-8">
+          <span className="mb-3 block font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
+            Try a scene
+          </span>
+          <div className="flex flex-col gap-2">
+            {EXAMPLE_SCENES.map((example) => (
+              <button
+                key={example}
+                type="button"
+                onClick={() => {
+                  setScene(example)
+                  generate(example)
+                }}
+                className="rounded-lg border border-border bg-card px-4 py-3 text-left text-sm leading-relaxed text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div
+          role="alert"
+          className="mb-8 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          {error}
+        </div>
+      )}
+
+      {/* Shot list */}
+      {(shots.length > 0 || isGenerating) && (
+        <section aria-label="Shot list" className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 font-mono text-sm font-semibold uppercase tracking-widest text-foreground">
+              <Film className="size-4 text-primary" aria-hidden="true" />
+              {'Shot Breakdown'}
+              {shots.length > 0 && (
+                <span className="text-muted-foreground">
+                  {'// '}
+                  {shots.length}
+                  {isGenerating ? '+' : ''}
+                </span>
+              )}
+            </h2>
+            {shots.length > 0 && !isGenerating && (
+              <CopyButton text={allPrompts} label="Copy all prompts" />
+            )}
+          </div>
+
+          {shots.map((shot) => (
+            <ShotCard key={shot.shotNumber} shot={shot} />
+          ))}
+
+          {isGenerating && (
+            <div className="flex items-center gap-3 rounded-xl border border-dashed border-border bg-card/50 p-6">
+              <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
+              <span className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+                {shots.length === 0 ? 'Breaking down your scene…' : 'Next shot incoming…'}
+              </span>
+            </div>
+          )}
+        </section>
+      )}
+
+      <footer className="mt-auto pt-12">
+        <p className="text-center font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
+          {'Prompts formatted for Seedance · Kling · Runway · Veo'}
+        </p>
+      </footer>
+    </main>
+  )
+}
