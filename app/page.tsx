@@ -16,6 +16,12 @@ import {
   Trash2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  DEFAULT_MODEL_ID,
+  MODEL_OPTIONS,
+  isAllowedModel,
+  type GenerationSummary,
+} from '@/lib/models'
 
 type Shot = {
   shotNumber: number
@@ -30,6 +36,7 @@ type Shot = {
 }
 
 const API_KEY_STORAGE = 'shotcaller-gateway-key'
+const MODEL_STORAGE = 'shotcaller-model'
 
 const EXAMPLE_SCENES = [
   'A lone astronaut discovers an abandoned greenhouse on Mars, sunrise breaking through dusty glass panels',
@@ -55,6 +62,22 @@ function SpecRow({
         </span>
         <span className="text-sm leading-relaxed text-card-foreground">{value}</span>
       </div>
+    </div>
+  )
+}
+
+function formatCost(costUsd: number): string {
+  if (costUsd < 0.0001) return '< $0.0001'
+  return `$${costUsd.toFixed(costUsd < 0.01 ? 4 : 2)}`
+}
+
+function MetricItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
+        {label}
+      </span>
+      <span className="font-mono text-xs text-card-foreground">{value}</span>
     </div>
   )
 }
@@ -272,6 +295,8 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [keyPanelOpen, setKeyPanelOpen] = useState(false)
+  const [modelId, setModelId] = useState(DEFAULT_MODEL_ID)
+  const [summary, setSummary] = useState<GenerationSummary | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -281,6 +306,13 @@ export default function Page() {
     } else {
       setKeyPanelOpen(true)
     }
+    const storedModel = window.localStorage.getItem(MODEL_STORAGE)
+    if (isAllowedModel(storedModel)) setModelId(storedModel)
+  }, [])
+
+  const selectModel = useCallback((id: string) => {
+    setModelId(id)
+    window.localStorage.setItem(MODEL_STORAGE, id)
   }, [])
 
   const saveKey = useCallback((key: string) => {
@@ -311,6 +343,7 @@ export default function Page() {
       setIsGenerating(true)
       setError(null)
       setShots([])
+      setSummary(null)
 
       try {
         const res = await fetch('/api/generate', {
@@ -319,7 +352,7 @@ export default function Page() {
             'Content-Type': 'application/json',
             'x-gateway-api-key': apiKey,
           },
-          body: JSON.stringify({ scene: sceneText }),
+          body: JSON.stringify({ scene: sceneText, model: modelId }),
           signal: controller.signal,
         })
 
@@ -346,8 +379,12 @@ export default function Page() {
           for (const line of lines) {
             if (line.trim().length === 0) continue
             try {
-              const shot = JSON.parse(line) as Shot
-              setShots((prev) => [...prev, shot])
+              const parsed = JSON.parse(line) as Shot | GenerationSummary
+              if ('__summary' in parsed) {
+                setSummary(parsed)
+              } else {
+                setShots((prev) => [...prev, parsed])
+              }
             } catch {
               // Skip malformed lines rather than aborting the whole stream
             }
@@ -360,7 +397,7 @@ export default function Page() {
         setIsGenerating(false)
       }
     },
-    [isGenerating, apiKey],
+    [isGenerating, apiKey, modelId],
   )
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -427,6 +464,38 @@ export default function Page() {
             maxLength={2000}
             className="w-full resize-none bg-transparent text-sm leading-relaxed text-card-foreground placeholder:text-muted-foreground focus:outline-none md:text-base"
           />
+          <fieldset className="mt-3 border-t border-border pt-3">
+            <legend className="sr-only">Model</legend>
+            <div
+              role="radiogroup"
+              aria-label="Model"
+              className="flex flex-wrap gap-2"
+            >
+              {MODEL_OPTIONS.map((option) => {
+                const selected = option.id === modelId
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => selectModel(option.id)}
+                    title={option.tagline}
+                    className={
+                      selected
+                        ? 'pressable rounded-md border border-primary bg-primary/10 px-3 py-1.5 font-mono text-xs text-primary'
+                        : 'pressable rounded-md border border-border bg-transparent px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground'
+                    }
+                  >
+                    {option.name}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+              {MODEL_OPTIONS.find((m) => m.id === modelId)?.tagline}
+            </p>
+          </fieldset>
           <div className="mt-3 flex items-center justify-between gap-3">
             <span className="hidden font-mono text-[11px] text-muted-foreground sm:block">
               {'⌘ + Enter to generate'}
@@ -510,6 +579,22 @@ export default function Page() {
               <span className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
                 {shots.length === 0 ? 'Breaking down your scene…' : 'Next shot incoming…'}
               </span>
+            </div>
+          )}
+
+          {summary && !isGenerating && (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-border bg-card px-4 py-3">
+              <MetricItem
+                label="Model"
+                value={MODEL_OPTIONS.find((m) => m.id === summary.model)?.name ?? summary.model}
+              />
+              <MetricItem
+                label="Tokens"
+                value={`${summary.inputTokens.toLocaleString()} in / ${summary.outputTokens.toLocaleString()} out`}
+              />
+              {summary.costUsd !== null && (
+                <MetricItem label="Cost" value={formatCost(summary.costUsd)} />
+              )}
             </div>
           )}
         </section>

@@ -1,5 +1,6 @@
 import { streamText, Output, createGateway } from 'ai'
 import { z } from 'zod'
+import { DEFAULT_MODEL_ID, isAllowedModel, type GenerationSummary } from '@/lib/models'
 
 export const maxDuration = 120
 
@@ -48,6 +49,17 @@ export async function POST(req: Request) {
   if (typeof scene !== 'string' || scene.trim().length === 0) {
     return Response.json({ error: 'Scene description is required.' }, { status: 400 })
   }
+
+  const requestedModel = (body as { model?: unknown })?.model
+  const modelId =
+    requestedModel === undefined
+      ? DEFAULT_MODEL_ID
+      : isAllowedModel(requestedModel)
+        ? requestedModel
+        : null
+  if (modelId === null) {
+    return Response.json({ error: 'Unknown model.' }, { status: 400 })
+  }
   if (scene.length > MAX_SCENE_LENGTH) {
     return Response.json(
       { error: `Scene description must be ${MAX_SCENE_LENGTH} characters or fewer.` },
@@ -65,20 +77,35 @@ export async function POST(req: Request) {
 
   const gateway = createGateway({ apiKey })
 
-  // Validate the key up front so bad keys fail with a clear 401
-  // instead of a broken stream mid-generation.
-  try {
-    await gateway.getCredits()
-  } catch (error) {
-    console.error('Gateway key validation failed:', error)
+  // Validate the key up front (getCredits requires auth) so bad keys fail
+  // with a clear 401 instead of a broken stream mid-generation. In parallel,
+  // fetch the model list, which carries per-token pricing for cost reporting.
+  const [creditsResult, modelsResult] = await Promise.allSettled([
+    gateway.getCredits(),
+    gateway.getAvailableModels(),
+  ])
+
+  if (creditsResult.status === 'rejected') {
+    console.error('Gateway key validation failed:', creditsResult.reason)
     return Response.json(
       { error: 'That API key was rejected by AI Gateway. Check it and try again.' },
       { status: 401 },
     )
   }
 
+  let pricing: { input: number; output: number } | null = null
+  if (modelsResult.status === 'fulfilled') {
+    const modelInfo = modelsResult.value.models.find((m) => m.id === modelId)
+    if (modelInfo?.pricing) {
+      pricing = {
+        input: Number(modelInfo.pricing.input),
+        output: Number(modelInfo.pricing.output),
+      }
+    }
+  }
+
   const result = streamText({
-    model: gateway('openai/gpt-5.4-mini'),
+    model: gateway(modelId),
     output: Output.array({
       name: 'ShotList',
       description: 'A cinematic shot list breaking a scene into individual shots.',
@@ -102,6 +129,20 @@ For each shot's videoPrompt, write one dense paragraph optimized for AI video ge
         for await (const shot of result.elementStream) {
           controller.enqueue(encoder.encode(JSON.stringify(shot) + '\n'))
         }
+
+        // Final line: token usage and cost for this generation.
+        const usage = await result.usage
+        const inputTokens = usage.inputTokens ?? 0
+        const outputTokens = usage.outputTokens ?? 0
+        const summary: GenerationSummary = {
+          __summary: true,
+          model: modelId,
+          inputTokens,
+          outputTokens,
+          totalTokens: usage.totalTokens ?? inputTokens + outputTokens,
+          costUsd: pricing ? inputTokens * pricing.input + outputTokens * pricing.output : null,
+        }
+        controller.enqueue(encoder.encode(JSON.stringify(summary) + '\n'))
         controller.close()
       } catch (error) {
         console.error('Shot list stream error:', error)
