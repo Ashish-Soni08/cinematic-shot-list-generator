@@ -59,12 +59,38 @@ function SpecRow({
   )
 }
 
+async function copyText(text: string): Promise<boolean> {
+  // The Clipboard API can be blocked by iframe permissions policies
+  // (e.g. in embedded previews), so fall back to execCommand.
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      textarea.style.pointerEvents = 'none'
+      document.body.appendChild(textarea)
+      textarea.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      return ok
+    } catch {
+      return false
+    }
+  }
+}
+
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(text)
+    const ok = await copyText(text)
+    if (!ok) return
     setCopied(true)
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
     timeoutRef.current = setTimeout(() => setCopied(false), 2000)
