@@ -255,7 +255,7 @@ function ShotCard({ shot, index }: { shot: Shot; index: number }) {
 
       <div className="rounded-lg border border-border bg-background p-4">
         <span className="mb-2 block font-mono text-[11px] uppercase tracking-widest text-primary">
-          {'AI Video Prompt // Seedance · Kling'}
+          Video prompt
         </span>
         <p className="font-mono text-xs leading-relaxed text-muted-foreground">
           {shot.videoPrompt}
@@ -299,7 +299,7 @@ export default function Page() {
       if (isGenerating || sceneText.trim().length === 0) return
 
       if (apiKey.length === 0) {
-        setError('Add your AI Gateway API key first. It only takes a minute.')
+        setError('Add your AI Gateway API key first.')
         setKeyPanelOpen(true)
         return
       }
@@ -345,13 +345,16 @@ export default function Page() {
           buffer = lines.pop() ?? ''
           for (const line of lines) {
             if (line.trim().length === 0) continue
-            const shot = JSON.parse(line) as Shot
-            setShots((prev) => [...prev, shot])
+            try {
+              const shot = JSON.parse(line) as Shot
+              setShots((prev) => [...prev, shot])
+            } catch {
+              // Skip malformed lines rather than aborting the whole stream
+            }
           }
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        console.error('[v0] generation error:', err)
         setError(err instanceof Error ? err.message : 'Something went wrong.')
       } finally {
         setIsGenerating(false)
@@ -373,15 +376,10 @@ export default function Page() {
     <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 py-10 md:py-16">
       {/* Header */}
       <header className="mb-8">
-        <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Clapperboard className="size-5 text-primary" aria-hidden="true" />
-            <span className="font-mono text-sm font-semibold tracking-wider text-foreground">
-              SHOTCALLER
-            </span>
-          </div>
-          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-            {isGenerating ? 'Rolling…' : 'System Ready'}
+        <div className="mb-6 flex items-center gap-2">
+          <Clapperboard className="size-5 text-primary" aria-hidden="true" />
+          <span className="font-mono text-sm font-semibold tracking-wider text-foreground">
+            SHOTCALLER
           </span>
         </div>
         <h1 className="mb-3 text-3xl font-bold leading-tight text-foreground text-balance md:text-4xl">
@@ -426,6 +424,7 @@ export default function Page() {
             }}
             placeholder="A detective enters a rain-soaked alley at midnight, neon signs flickering overhead, and finds a single red umbrella lying on the ground…"
             rows={4}
+            maxLength={2000}
             className="w-full resize-none bg-transparent text-sm leading-relaxed text-card-foreground placeholder:text-muted-foreground focus:outline-none md:text-base"
           />
           <div className="mt-3 flex items-center justify-between gap-3">
@@ -491,7 +490,6 @@ export default function Page() {
               {'Shot Breakdown'}
               {shots.length > 0 && (
                 <span className="text-muted-foreground">
-                  {'// '}
                   {shots.length}
                   {isGenerating ? '+' : ''}
                 </span>
@@ -503,7 +501,7 @@ export default function Page() {
           </div>
 
           {shots.map((shot, index) => (
-            <ShotCard key={shot.shotNumber} shot={shot} index={index} />
+            <ShotCard key={index} shot={shot} index={index} />
           ))}
 
           {isGenerating && (
@@ -519,7 +517,7 @@ export default function Page() {
 
       <footer className="mt-auto pt-12">
         <p className="text-center font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-          {'Prompts formatted for Seedance · Kling · Runway · Veo'}
+          Prompts formatted for Seedance, Kling, Runway, and Veo
         </p>
       </footer>
     </main>

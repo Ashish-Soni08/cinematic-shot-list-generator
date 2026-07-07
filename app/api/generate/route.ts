@@ -33,15 +33,30 @@ const shotSchema = z.object({
     ),
 })
 
-export async function POST(req: Request) {
-  const { scene } = await req.json()
+const MAX_SCENE_LENGTH = 2000
+const MAX_KEY_LENGTH = 256
 
+export async function POST(req: Request) {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return Response.json({ error: 'Invalid request body.' }, { status: 400 })
+  }
+
+  const scene = (body as { scene?: unknown })?.scene
   if (typeof scene !== 'string' || scene.trim().length === 0) {
     return Response.json({ error: 'Scene description is required.' }, { status: 400 })
   }
+  if (scene.length > MAX_SCENE_LENGTH) {
+    return Response.json(
+      { error: `Scene description must be ${MAX_SCENE_LENGTH} characters or fewer.` },
+      { status: 400 },
+    )
+  }
 
   const apiKey = req.headers.get('x-gateway-api-key')?.trim()
-  if (!apiKey) {
+  if (!apiKey || apiKey.length > MAX_KEY_LENGTH) {
     return Response.json(
       { error: 'Add your AI Gateway API key to generate shot lists.' },
       { status: 401 },
@@ -55,7 +70,7 @@ export async function POST(req: Request) {
   try {
     await gateway.getCredits()
   } catch (error) {
-    console.error('[v0] gateway key validation failed:', error)
+    console.error('Gateway key validation failed:', error)
     return Response.json(
       { error: 'That API key was rejected by AI Gateway. Check it and try again.' },
       { status: 401 },
@@ -76,7 +91,7 @@ Vary shot sizes, angles, and movement across the list. Be specific and technical
 For each shot's videoPrompt, write one dense paragraph optimized for AI video generators like Seedance or Kling: lead with the subject and action, then camera framing and movement, then lens/optical character, then lighting, color palette, and mood keywords (e.g. "cinematic, film grain, anamorphic bokeh"). Keep each prompt self-contained — never reference other shots.`,
     prompt: `Scene description:\n\n${scene.trim()}`,
     onError({ error }) {
-      console.error('[v0] shot list generation error:', error)
+      console.error('Shot list generation error:', error)
     },
   })
 
@@ -89,7 +104,7 @@ For each shot's videoPrompt, write one dense paragraph optimized for AI video ge
         }
         controller.close()
       } catch (error) {
-        console.error('[v0] shot list stream error:', error)
+        console.error('Shot list stream error:', error)
         controller.error(error)
       }
     },
